@@ -17,6 +17,7 @@ limitations under the License.
 package windows
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,8 @@ import (
 	kubeletconfigv1beta1 "k8s.io/kubelet/config/v1beta1"
 	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
+	e2eskipper "k8s.io/kubernetes/test/e2e/framework/skipper"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	"github.com/onsi/ginkgo"
@@ -47,7 +50,7 @@ var _ = SIGDescribe("[Feature:Windows] Memory Limits [Serial] [Slow]", func() {
 
 	ginkgo.BeforeEach(func() {
 		// NOTE(vyta): these tests are Windows specific
-		framework.SkipUnlessNodeOSDistroIs("windows")
+		e2eskipper.SkipUnlessNodeOSDistroIs("windows")
 	})
 
 	ginkgo.Context("Allocatable node memory", func() {
@@ -120,7 +123,7 @@ func overrideAllocatableMemoryTest(f *framework.Framework, allocatablePods int) 
 	f.PodClient().Create(failurePods[0])
 
 	gomega.Eventually(func() bool {
-		eventList, err := f.ClientSet.CoreV1().Events(f.Namespace.Name).List(metav1.ListOptions{})
+		eventList, err := f.ClientSet.CoreV1().Events(f.Namespace.Name).List(context.TODO(), metav1.ListOptions{})
 		framework.ExpectNoError(err)
 		for _, e := range eventList.Items {
 			// Look for an event that shows FailedScheduling
@@ -179,7 +182,7 @@ func newMemLimitTestPods(numPods int, imageName, podType string, memoryLimit str
 // getNodeMemory populates a nodeMemory struct with information from the first
 func getNodeMemory(f *framework.Framework) nodeMemory {
 	selector := labels.Set{"beta.kubernetes.io/os": "windows"}.AsSelector()
-	nodeList, err := f.ClientSet.CoreV1().Nodes().List(metav1.ListOptions{
+	nodeList, err := f.ClientSet.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{
 		LabelSelector: selector.String(),
 	})
 	framework.ExpectNoError(err)
@@ -194,7 +197,7 @@ func getNodeMemory(f *framework.Framework) nodeMemory {
 
 	nodeName := nodeList.Items[0].ObjectMeta.Name
 
-	kubeletConfig, err := getCurrentKubeletConfig(nodeName)
+	kubeletConfig, err := getCurrentKubeletConfig(nodeName, f.Namespace.Name)
 	framework.ExpectNoError(err)
 
 	systemReserve, err := resource.ParseQuantity(kubeletConfig.SystemReserved["memory"])
@@ -230,7 +233,7 @@ func getNodeMemory(f *framework.Framework) nodeMemory {
 // getTotalAllocatableMemory gets the sum of all agent node's allocatable memory
 func getTotalAllocatableMemory(f *framework.Framework) *resource.Quantity {
 	selector := labels.Set{"beta.kubernetes.io/os": "windows"}.AsSelector()
-	nodeList, err := f.ClientSet.CoreV1().Nodes().List(metav1.ListOptions{
+	nodeList, err := f.ClientSet.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{
 		LabelSelector: selector.String(),
 	})
 	framework.ExpectNoError(err)
@@ -249,9 +252,9 @@ func getTotalAllocatableMemory(f *framework.Framework) *resource.Quantity {
 }
 
 // getCurrentKubeletConfig modified from test/e2e_node/util.go
-func getCurrentKubeletConfig(nodeName string) (*kubeletconfig.KubeletConfiguration, error) {
+func getCurrentKubeletConfig(nodeName, namespace string) (*kubeletconfig.KubeletConfiguration, error) {
 
-	resp := pollConfigz(5*time.Minute, 5*time.Second, nodeName)
+	resp := pollConfigz(5*time.Minute, 5*time.Second, nodeName, namespace)
 	kubeCfg, err := decodeConfigz(resp)
 	if err != nil {
 		return nil, err
@@ -260,10 +263,11 @@ func getCurrentKubeletConfig(nodeName string) (*kubeletconfig.KubeletConfigurati
 }
 
 // Causes the test to fail, or returns a status 200 response from the /configz endpoint
-func pollConfigz(timeout time.Duration, pollInterval time.Duration, nodeName string) *http.Response {
+func pollConfigz(timeout time.Duration, pollInterval time.Duration, nodeName, namespace string) *http.Response {
 	// start local proxy, so we can send graceful deletion over query string, rather than body parameter
 	ginkgo.By("Opening proxy to cluster")
-	cmd := framework.KubectlCmd("proxy", "-p", "0")
+	tk := e2ekubectl.NewTestKubeconfig(framework.TestContext.CertDir, framework.TestContext.Host, framework.TestContext.KubeConfig, framework.TestContext.KubeContext, framework.TestContext.KubectlPath, namespace)
+	cmd := tk.KubectlCmd("proxy", "-p", "0")
 	stdout, stderr, err := framework.StartCmdAndStreamOutput(cmd)
 	framework.ExpectNoError(err)
 	defer stdout.Close()

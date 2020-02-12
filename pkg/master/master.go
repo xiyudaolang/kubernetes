@@ -17,6 +17,7 @@ limitations under the License.
 package master
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -27,8 +28,6 @@ import (
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	admissionregistrationv1beta1 "k8s.io/api/admissionregistration/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
-	appsv1beta1 "k8s.io/api/apps/v1beta1"
-	appsv1beta2 "k8s.io/api/apps/v1beta2"
 	auditregistrationv1alpha1 "k8s.io/api/auditregistration/v1alpha1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	authenticationv1beta1 "k8s.io/api/authentication/v1beta1"
@@ -89,7 +88,6 @@ import (
 	"k8s.io/kubernetes/pkg/serviceaccount"
 	nodeutil "k8s.io/kubernetes/pkg/util/node"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/klog"
 
 	// RESTStorage installers
@@ -452,7 +450,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 func (m *Master) InstallLegacyAPI(c *completedConfig, restOptionsGetter generic.RESTOptionsGetter, legacyRESTStorageProvider corerest.LegacyRESTStorageProvider) error {
 	legacyRESTStorage, apiGroupInfo, err := legacyRESTStorageProvider.NewLegacyRESTStorage(restOptionsGetter)
 	if err != nil {
-		return fmt.Errorf("Error building core storage: %v", err)
+		return fmt.Errorf("error building core storage: %v", err)
 	}
 
 	controllerName := "bootstrap-controller"
@@ -462,22 +460,17 @@ func (m *Master) InstallLegacyAPI(c *completedConfig, restOptionsGetter generic.
 	m.GenericAPIServer.AddPreShutdownHookOrDie(controllerName, bootstrapController.PreShutdownHook)
 
 	if err := m.GenericAPIServer.InstallLegacyAPIGroup(genericapiserver.DefaultLegacyAPIPrefix, &apiGroupInfo); err != nil {
-		return fmt.Errorf("Error in registering group versions: %v", err)
+		return fmt.Errorf("error in registering group versions: %v", err)
 	}
 	return nil
 }
 
 func (m *Master) installTunneler(nodeTunneler tunneler.Tunneler, nodeClient corev1client.NodeInterface) {
 	nodeTunneler.Run(nodeAddressProvider{nodeClient}.externalAddresses)
-	m.GenericAPIServer.AddHealthChecks(healthz.NamedCheck("SSH Tunnel Check", tunneler.TunnelSyncHealthChecker(nodeTunneler)))
-	prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Name: "apiserver_proxy_tunnel_sync_duration_seconds",
-		Help: "The time since the last successful synchronization of the SSH tunnels for proxy requests.",
-	}, func() float64 { return float64(nodeTunneler.SecondsSinceSync()) })
-	prometheus.NewGaugeFunc(prometheus.GaugeOpts{
-		Name: "apiserver_proxy_tunnel_sync_latency_secs",
-		Help: "(Deprecated) The time since the last successful synchronization of the SSH tunnels for proxy requests.",
-	}, func() float64 { return float64(nodeTunneler.SecondsSinceSync()) })
+	err := m.GenericAPIServer.AddHealthChecks(healthz.NamedCheck("SSH Tunnel Check", tunneler.TunnelSyncHealthChecker(nodeTunneler)))
+	if err != nil {
+		klog.Errorf("Failed adding ssh tunnel health check %v\n", err)
+	}
 }
 
 // RESTStorageProvider is a factory type for REST storage.
@@ -518,7 +511,7 @@ func (m *Master) InstallAPIs(apiResourceConfigSource serverstorage.APIResourceCo
 	}
 
 	if err := m.GenericAPIServer.InstallAPIGroups(apiGroupsInfo...); err != nil {
-		return fmt.Errorf("Error in registering group versions: %v", err)
+		return fmt.Errorf("error in registering group versions: %v", err)
 	}
 	return nil
 }
@@ -531,7 +524,7 @@ func (n nodeAddressProvider) externalAddresses() ([]string, error) {
 	preferredAddressTypes := []apiv1.NodeAddressType{
 		apiv1.NodeExternalIP,
 	}
-	nodes, err := n.nodeClient.List(metav1.ListOptions{})
+	nodes, err := n.nodeClient.List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -596,20 +589,6 @@ func DefaultAPIResourceConfigSource() *serverstorage.ResourceConfig {
 	// enable non-deprecated beta resources in extensions/v1beta1 explicitly so we have a full list of what's possible to serve
 	ret.EnableResources(
 		extensionsapiv1beta1.SchemeGroupVersion.WithResource("ingresses"),
-	)
-	// disable deprecated beta resources in extensions/v1beta1 explicitly so we have a full list of what's possible to serve
-	ret.DisableResources(
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("daemonsets"),
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("deployments"),
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("networkpolicies"),
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("podsecuritypolicies"),
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("replicasets"),
-		extensionsapiv1beta1.SchemeGroupVersion.WithResource("replicationcontrollers"),
-	)
-	// disable deprecated beta versions explicitly so we have a full list of what's possible to serve
-	ret.DisableVersions(
-		appsv1beta1.SchemeGroupVersion,
-		appsv1beta2.SchemeGroupVersion,
 	)
 	// disable alpha versions explicitly so we have a full list of what's possible to serve
 	ret.DisableVersions(

@@ -18,10 +18,11 @@ limitations under the License.
 
 // To run tests in this suite
 // NOTE: This test suite requires password-less sudo capabilities to run the kubelet and kube-apiserver.
-package e2e_node
+package e2enode
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -302,12 +303,12 @@ func updateTestContext() error {
 
 // getNode gets node object from the apiserver.
 func getNode(c *clientset.Clientset) (*v1.Node, error) {
-	nodes, err := c.CoreV1().Nodes().List(metav1.ListOptions{})
+	nodes, err := c.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	framework.ExpectNoError(err, "should be able to list nodes.")
 	if nodes == nil {
-		return nil, fmt.Errorf("the node list is nil.")
+		return nil, fmt.Errorf("the node list is nil")
 	}
-	gomega.Expect(len(nodes.Items) > 1).NotTo(gomega.BeTrue(), "the number of nodes is more than 1.")
+	framework.ExpectEqual(len(nodes.Items) > 1, false, "the number of nodes is more than 1.")
 	if len(nodes.Items) == 0 {
 		return nil, fmt.Errorf("empty node list: %+v", nodes)
 	}

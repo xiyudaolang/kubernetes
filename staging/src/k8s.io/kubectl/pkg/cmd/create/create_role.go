@@ -17,6 +17,7 @@ limitations under the License.
 package create
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -59,6 +60,10 @@ var (
 	// Specialized verbs and GroupResources
 	specialVerbs = map[string][]schema.GroupResource{
 		"use": {
+			{
+				Group:    "policy",
+				Resource: "podsecuritypolicies",
+			},
 			{
 				Group:    "extensions",
 				Resource: "podsecuritypolicies",
@@ -231,7 +236,7 @@ func (o *CreateRoleOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args
 		return err
 	}
 
-	o.DryRun = cmdutil.GetDryRunFlag(cmd)
+	o.DryRun = cmdutil.GetClientSideDryRun(cmd)
 	o.OutputFormat = cmdutil.GetFlagString(cmd, "output")
 
 	if o.DryRun {
@@ -337,7 +342,7 @@ func (o *CreateRoleOptions) RunCreateRole() error {
 
 	// Create role.
 	if !o.DryRun {
-		role, err = o.Client.Roles(o.Namespace).Create(role)
+		role, err = o.Client.Roles(o.Namespace).Create(context.TODO(), role, metav1.CreateOptions{})
 		if err != nil {
 			return err
 		}

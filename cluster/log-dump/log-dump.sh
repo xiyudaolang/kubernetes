@@ -41,7 +41,7 @@ readonly master_ssh_supported_providers="gce aws kubernetes-anywhere"
 readonly node_ssh_supported_providers="gce gke aws kubernetes-anywhere"
 readonly gcloud_supported_providers="gce gke kubernetes-anywhere"
 
-readonly master_logfiles="kube-apiserver.log kube-apiserver-audit.log kube-scheduler.log kube-controller-manager.log etcd.log etcd-events.log glbc.log cluster-autoscaler.log kube-addon-manager.log fluentd.log kubelet.cov"
+readonly master_logfiles="kube-apiserver.log kube-apiserver-audit.log kube-scheduler.log kube-controller-manager.log etcd.log etcd-events.log glbc.log cluster-autoscaler.log kube-addon-manager.log konnectivity-server.log fluentd.log kubelet.cov"
 readonly node_logfiles="kube-proxy.log fluentd.log node-problem-detector.log kubelet.cov"
 readonly node_systemd_services="node-problem-detector"
 readonly hollow_node_logfiles="kubelet-hollow-node-*.log kubeproxy-hollow-node-*.log npd-hollow-node-*.log"
@@ -222,7 +222,7 @@ function export-windows-docker-event-log() {
 function save-windows-logs-via-diagnostics-tool() {
     local node="${1}"
     local dest_dir="${2}"
-    
+
     gcloud compute instances add-metadata ${node} --metadata enable-diagnostics=true --project=${PROJECT} --zone=${ZONE}
     local logs_archive_in_gcs=$(gcloud alpha compute diagnose export-logs ${node} --zone=${ZONE} --project=${PROJECT} | tail -n 1)
     local temp_local_path="${node}.zip"
@@ -504,10 +504,10 @@ function dump_nodes_with_logexporter() {
   # Store logs from logexporter pods to allow debugging log exporting process
   # itself.
   proc=${max_dump_processes}
-  "${KUBECTL}" get pods -n "${logexporter_namespace}" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\n"}{end}' | while read pod node; do
+  "${KUBECTL}" get pods -n "${logexporter_namespace}" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.nodeName}{"\n"}{end}' | (while read -r pod node; do
     echo "Fetching logs from ${pod} running on ${node}"
-    mkdir -p ${report_dir}/${node}
-    "${KUBECTL}" logs -n "${logexporter_namespace}" ${pod} > ${report_dir}/${node}/${pod}.log &
+    mkdir -p "${report_dir}/${node}"
+    "${KUBECTL}" logs -n "${logexporter_namespace}" "${pod}" > "${report_dir}/${node}/${pod}.log" &
 
     # We don't want to run more than ${max_dump_processes} at a time, so
     # wait once we hit that many nodes. This isn't ideal, since one might
@@ -517,11 +517,8 @@ function dump_nodes_with_logexporter() {
       proc=${max_dump_processes}
       wait
     fi
-  done
   # Wait for any remaining processes.
-  if [[ proc -gt 0 && proc -lt ${max_dump_processes} ]]; then
-    wait
-  fi
+  done; wait)
 
   # List registry of marker files (of nodes whose logexporter succeeded) from GCS.
   local nodes_succeeded

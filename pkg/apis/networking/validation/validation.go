@@ -123,10 +123,8 @@ func ValidateNetworkPolicySpec(spec *networking.NetworkPolicySpec, fldPath *fiel
 	}
 	for i, pType := range spec.PolicyTypes {
 		policyPath := fldPath.Child("policyTypes").Index(i)
-		for _, p := range spec.PolicyTypes {
-			if !allowed.Has(string(p)) {
-				allErrs = append(allErrs, field.NotSupported(policyPath, pType, []string{string(networking.PolicyTypeIngress), string(networking.PolicyTypeEgress)}))
-			}
+		if !allowed.Has(string(pType)) {
+			allErrs = append(allErrs, field.NotSupported(policyPath, pType, []string{string(networking.PolicyTypeIngress), string(networking.PolicyTypeEgress)}))
 		}
 	}
 	return allErrs
@@ -167,8 +165,10 @@ func ValidateIPBlock(ipb *networking.IPBlock, fldPath *field.Path) field.ErrorLi
 			allErrs = append(allErrs, field.Invalid(exceptPath, exceptIP, "not a valid CIDR"))
 			return allErrs
 		}
-		if !cidrIPNet.Contains(exceptCIDR.IP) {
-			allErrs = append(allErrs, field.Invalid(exceptPath, exceptCIDR.IP, "not within CIDR range"))
+		cidrMaskLen, _ := cidrIPNet.Mask.Size()
+		exceptMaskLen, _ := exceptCIDR.Mask.Size()
+		if !cidrIPNet.Contains(exceptCIDR.IP) || cidrMaskLen >= exceptMaskLen {
+			allErrs = append(allErrs, field.Invalid(exceptPath, exceptIP, "must be a strict subset of `cidr`"))
 		}
 	}
 	return allErrs

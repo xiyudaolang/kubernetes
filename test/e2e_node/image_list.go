@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package e2e_node
+package e2enode
 
 import (
 	"fmt"
@@ -95,7 +95,6 @@ func (dp *dockerPuller) Name() string {
 }
 
 func (dp *dockerPuller) Pull(image string) ([]byte, error) {
-	// TODO(random-liu): Use docker client to get rid of docker binary dependency.
 	return exec.Command("docker", "pull", image).CombinedOutput()
 }
 
@@ -133,7 +132,7 @@ func getPuller() (puller, error) {
 	return nil, fmt.Errorf("can't prepull images, unknown container runtime %q", runtime)
 }
 
-// Pre-fetch all images tests depend on so that we don't fail in an actual test.
+// PrePullAllImages pre-fetches all images tests depend on so that we don't fail in an actual test.
 func PrePullAllImages() error {
 	puller, err := getPuller()
 	if err != nil {

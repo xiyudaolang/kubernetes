@@ -143,22 +143,11 @@ func (podStrategy) CheckGracefulDelete(ctx context.Context, obj runtime.Object, 
 	return true
 }
 
-type podStrategyWithoutGraceful struct {
-	podStrategy
-}
-
-// CheckGracefulDelete prohibits graceful deletion.
-func (podStrategyWithoutGraceful) CheckGracefulDelete(ctx context.Context, obj runtime.Object, options *metav1.DeleteOptions) bool {
-	return false
-}
-
-// StrategyWithoutGraceful implements the legacy instant delete behavior.
-var StrategyWithoutGraceful = podStrategyWithoutGraceful{Strategy}
-
 type podStatusStrategy struct {
 	podStrategy
 }
 
+// StatusStrategy wraps and exports the used podStrategy for the storage package.
 var StatusStrategy = podStatusStrategy{Strategy}
 
 func (podStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
@@ -180,6 +169,7 @@ type podEphemeralContainersStrategy struct {
 	podStrategy
 }
 
+// EphemeralContainersStrategy wraps and exports the used podStrategy for the storage package.
 var EphemeralContainersStrategy = podEphemeralContainersStrategy{Strategy}
 
 func (podEphemeralContainersStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
@@ -192,7 +182,7 @@ func GetAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 	if !ok {
 		return nil, nil, fmt.Errorf("not a pod")
 	}
-	return labels.Set(pod.ObjectMeta.Labels), PodToSelectableFields(pod), nil
+	return labels.Set(pod.ObjectMeta.Labels), ToSelectableFields(pod), nil
 }
 
 // MatchPod returns a generic matcher for a given label and field selector.
@@ -210,9 +200,9 @@ func NodeNameTriggerFunc(obj runtime.Object) string {
 	return obj.(*api.Pod).Spec.NodeName
 }
 
-// PodToSelectableFields returns a field set that represents the object
+// ToSelectableFields returns a field set that represents the object
 // TODO: fields are not labels, and the validation rules for them do not apply.
-func PodToSelectableFields(pod *api.Pod) fields.Set {
+func ToSelectableFields(pod *api.Pod) fields.Set {
 	// The purpose of allocation with a given number of elements is to reduce
 	// amount of allocations needed to create the fields.Set. If you add any
 	// field here or the number of object-meta related fields changes, this should
@@ -238,7 +228,7 @@ type ResourceGetter interface {
 	Get(context.Context, string, *metav1.GetOptions) (runtime.Object, error)
 }
 
-func getPod(getter ResourceGetter, ctx context.Context, name string) (*api.Pod, error) {
+func getPod(ctx context.Context, getter ResourceGetter, name string) (*api.Pod, error) {
 	obj, err := getter.Get(ctx, name, &metav1.GetOptions{})
 	if err != nil {
 		return nil, err
@@ -250,7 +240,7 @@ func getPod(getter ResourceGetter, ctx context.Context, name string) (*api.Pod, 
 	return pod, nil
 }
 
-// returns primary IP for a Pod
+// getPodIP returns primary IP for a Pod
 func getPodIP(pod *api.Pod) string {
 	if pod == nil {
 		return ""
@@ -263,7 +253,7 @@ func getPodIP(pod *api.Pod) string {
 }
 
 // ResourceLocation returns a URL to which one can send traffic for the specified pod.
-func ResourceLocation(getter ResourceGetter, rt http.RoundTripper, ctx context.Context, id string) (*url.URL, http.RoundTripper, error) {
+func ResourceLocation(ctx context.Context, getter ResourceGetter, rt http.RoundTripper, id string) (*url.URL, http.RoundTripper, error) {
 	// Allow ID as "podname" or "podname:port" or "scheme:podname:port".
 	// If port is not specified, try to use the first defined port on the pod.
 	scheme, name, port, valid := utilnet.SplitSchemeNamePort(id)
@@ -271,7 +261,7 @@ func ResourceLocation(getter ResourceGetter, rt http.RoundTripper, ctx context.C
 		return nil, nil, errors.NewBadRequest(fmt.Sprintf("invalid pod request %q", id))
 	}
 
-	pod, err := getPod(getter, ctx, name)
+	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -313,13 +303,12 @@ func getContainerNames(containers []api.Container) string {
 // LogLocation returns the log URL for a pod container. If opts.Container is blank
 // and only one container is present in the pod, that container is used.
 func LogLocation(
-	getter ResourceGetter,
+	ctx context.Context, getter ResourceGetter,
 	connInfo client.ConnectionInfoGetter,
-	ctx context.Context,
 	name string,
 	opts *api.PodLogOptions,
 ) (*url.URL, http.RoundTripper, error) {
-	pod, err := getPod(getter, ctx, name)
+	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -327,25 +316,9 @@ func LogLocation(
 	// Try to figure out a container
 	// If a container was provided, it must be valid
 	container := opts.Container
-	if len(container) == 0 {
-		switch len(pod.Spec.Containers) {
-		case 1:
-			container = pod.Spec.Containers[0].Name
-		case 0:
-			return nil, nil, errors.NewBadRequest(fmt.Sprintf("a container name must be specified for pod %s", name))
-		default:
-			containerNames := getContainerNames(pod.Spec.Containers)
-			initContainerNames := getContainerNames(pod.Spec.InitContainers)
-			err := fmt.Sprintf("a container name must be specified for pod %s, choose one of: [%s]", name, containerNames)
-			if len(initContainerNames) > 0 {
-				err += fmt.Sprintf(" or one of the init containers: [%s]", initContainerNames)
-			}
-			return nil, nil, errors.NewBadRequest(err)
-		}
-	} else {
-		if !podHasContainerWithName(pod, container) {
-			return nil, nil, errors.NewBadRequest(fmt.Sprintf("container %s is not valid for pod %s", container, name))
-		}
+	container, err = validateContainer(container, pod)
+	if err != nil {
+		return nil, nil, err
 	}
 	nodeName := types.NodeName(pod.Spec.NodeName)
 	if len(nodeName) == 0 {
@@ -451,63 +424,48 @@ func streamParams(params url.Values, opts runtime.Object) error {
 // AttachLocation returns the attach URL for a pod container. If opts.Container is blank
 // and only one container is present in the pod, that container is used.
 func AttachLocation(
+	ctx context.Context,
 	getter ResourceGetter,
 	connInfo client.ConnectionInfoGetter,
-	ctx context.Context,
 	name string,
 	opts *api.PodAttachOptions,
 ) (*url.URL, http.RoundTripper, error) {
-	return streamLocation(getter, connInfo, ctx, name, opts, opts.Container, "attach")
+	return streamLocation(ctx, getter, connInfo, name, opts, opts.Container, "attach")
 }
 
 // ExecLocation returns the exec URL for a pod container. If opts.Container is blank
 // and only one container is present in the pod, that container is used.
 func ExecLocation(
+	ctx context.Context,
 	getter ResourceGetter,
 	connInfo client.ConnectionInfoGetter,
-	ctx context.Context,
 	name string,
 	opts *api.PodExecOptions,
 ) (*url.URL, http.RoundTripper, error) {
-	return streamLocation(getter, connInfo, ctx, name, opts, opts.Container, "exec")
+	return streamLocation(ctx, getter, connInfo, name, opts, opts.Container, "exec")
 }
 
 func streamLocation(
+	ctx context.Context,
 	getter ResourceGetter,
 	connInfo client.ConnectionInfoGetter,
-	ctx context.Context,
 	name string,
 	opts runtime.Object,
 	container,
 	path string,
 ) (*url.URL, http.RoundTripper, error) {
-	pod, err := getPod(getter, ctx, name)
+	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Try to figure out a container
 	// If a container was provided, it must be valid
-	if container == "" {
-		switch len(pod.Spec.Containers) {
-		case 1:
-			container = pod.Spec.Containers[0].Name
-		case 0:
-			return nil, nil, errors.NewBadRequest(fmt.Sprintf("a container name must be specified for pod %s", name))
-		default:
-			containerNames := getContainerNames(pod.Spec.Containers)
-			initContainerNames := getContainerNames(pod.Spec.InitContainers)
-			err := fmt.Sprintf("a container name must be specified for pod %s, choose one of: [%s]", name, containerNames)
-			if len(initContainerNames) > 0 {
-				err += fmt.Sprintf(" or one of the init containers: [%s]", initContainerNames)
-			}
-			return nil, nil, errors.NewBadRequest(err)
-		}
-	} else {
-		if !podHasContainerWithName(pod, container) {
-			return nil, nil, errors.NewBadRequest(fmt.Sprintf("container %s is not valid for pod %s", container, name))
-		}
+	container, err = validateContainer(container, pod)
+	if err != nil {
+		return nil, nil, err
 	}
+
 	nodeName := types.NodeName(pod.Spec.NodeName)
 	if len(nodeName) == 0 {
 		// If pod has not been assigned a host, return an empty location
@@ -532,13 +490,13 @@ func streamLocation(
 
 // PortForwardLocation returns the port-forward URL for a pod.
 func PortForwardLocation(
+	ctx context.Context,
 	getter ResourceGetter,
 	connInfo client.ConnectionInfoGetter,
-	ctx context.Context,
 	name string,
 	opts *api.PodPortForwardOptions,
 ) (*url.URL, http.RoundTripper, error) {
-	pod, err := getPod(getter, ctx, name)
+	pod, err := getPod(ctx, getter, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -563,4 +521,30 @@ func PortForwardLocation(
 		RawQuery: params.Encode(),
 	}
 	return loc, nodeInfo.Transport, nil
+}
+
+// validateContainer validate container is valid for pod, return valid container
+func validateContainer(container string, pod *api.Pod) (string, error) {
+	if len(container) == 0 {
+		switch len(pod.Spec.Containers) {
+		case 1:
+			container = pod.Spec.Containers[0].Name
+		case 0:
+			return "", errors.NewBadRequest(fmt.Sprintf("a container name must be specified for pod %s", pod.Name))
+		default:
+			containerNames := getContainerNames(pod.Spec.Containers)
+			initContainerNames := getContainerNames(pod.Spec.InitContainers)
+			err := fmt.Sprintf("a container name must be specified for pod %s, choose one of: [%s]", pod.Name, containerNames)
+			if len(initContainerNames) > 0 {
+				err += fmt.Sprintf(" or one of the init containers: [%s]", initContainerNames)
+			}
+			return "", errors.NewBadRequest(err)
+		}
+	} else {
+		if !podHasContainerWithName(pod, container) {
+			return "", errors.NewBadRequest(fmt.Sprintf("container %s is not valid for pod %s", container, pod.Name))
+		}
+	}
+
+	return container, nil
 }

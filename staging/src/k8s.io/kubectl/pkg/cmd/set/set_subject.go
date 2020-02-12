@@ -120,7 +120,7 @@ func NewCmdSubject(f cmdutil.Factory, streams genericclioptions.IOStreams) *cobr
 // Complete completes all required options
 func (o *SubjectOptions) Complete(f cmdutil.Factory, cmd *cobra.Command, args []string) error {
 	o.Output = cmdutil.GetFlagString(cmd, "output")
-	o.DryRun = cmdutil.GetDryRunFlag(cmd)
+	o.DryRun = cmdutil.GetClientSideDryRun(cmd)
 
 	if o.DryRun {
 		o.PrintFlags.Complete("%s (dry run)")
@@ -247,7 +247,6 @@ func (o *SubjectOptions) Run(fn updateSubjects) error {
 
 		//no changes
 		if string(patch.Patch) == "{}" || len(patch.Patch) == 0 {
-			allErrs = append(allErrs, fmt.Errorf("info: %s was not changed\n", name))
 			continue
 		}
 

@@ -17,6 +17,7 @@ limitations under the License.
 package client
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"testing"
@@ -32,8 +33,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	clientset "k8s.io/client-go/kubernetes"
+	clientscheme "k8s.io/client-go/kubernetes/scheme"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
-	"k8s.io/kubernetes/pkg/api/testapi"
 	"k8s.io/kubernetes/test/integration/framework"
 )
 
@@ -64,7 +65,7 @@ func TestDynamicClient(t *testing.T) {
 		},
 	}
 
-	actual, err := client.CoreV1().Pods("default").Create(pod)
+	actual, err := client.CoreV1().Pods("default").Create(context.TODO(), pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error when creating pod: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestDynamicClient(t *testing.T) {
 		t.Fatalf("unexpected error when deleting pod: %v", err)
 	}
 
-	list, err := client.CoreV1().Pods("default").List(metav1.ListOptions{})
+	list, err := client.CoreV1().Pods("default").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		t.Fatalf("unexpected error when listing pods: %v", err)
 	}
@@ -149,7 +150,7 @@ func TestDynamicClientWatch(t *testing.T) {
 	rv1 := ""
 	for i := 0; i < 10; i++ {
 		event := mkEvent(i)
-		got, err := client.CoreV1().Events("default").Create(event)
+		got, err := client.CoreV1().Events("default").Create(context.TODO(), event, metav1.CreateOptions{})
 		if err != nil {
 			t.Fatalf("Failed creating event %#q: %v", event, err)
 		}
@@ -208,7 +209,7 @@ func unstructuredToPod(obj *unstructured.Unstructured) (*v1.Pod, error) {
 		return nil, err
 	}
 	pod := new(v1.Pod)
-	err = runtime.DecodeInto(testapi.Default.Codec(), json, pod)
+	err = runtime.DecodeInto(clientscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion), json, pod)
 	pod.Kind = ""
 	pod.APIVersion = ""
 	return pod, err
@@ -220,6 +221,6 @@ func unstructuredToEvent(obj *unstructured.Unstructured) (*v1.Event, error) {
 		return nil, err
 	}
 	event := new(v1.Event)
-	err = runtime.DecodeInto(testapi.Default.Codec(), json, event)
+	err = runtime.DecodeInto(clientscheme.Codecs.LegacyCodec(v1.SchemeGroupVersion), json, event)
 	return event, err
 }

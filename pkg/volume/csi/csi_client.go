@@ -22,17 +22,19 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
 	csipbv1 "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/volume"
+	volumetypes "k8s.io/kubernetes/pkg/volume/util/types"
 )
 
 type csiClient interface {
@@ -158,9 +160,8 @@ func (c *csiDriverClient) NodeGetInfo(ctx context.Context) (
 		if nodeID != "" {
 			return true, nil
 		}
-		// kubelet plugin registration service not implemented is a terminal error, no need to retry
-		if strings.Contains(getNodeInfoError.Error(), "no handler registered for plugin type") {
-			return false, getNodeInfoError
+		if getNodeInfoError != nil {
+			klog.Warningf("Error calling CSI NodeGetInfo(): %v", getNodeInfoError.Error())
 		}
 		// Continue with exponential backoff
 		return false, nil
@@ -213,6 +214,7 @@ func (c *csiDriverClient) NodePublishVolume(
 	if targetPath == "" {
 		return errors.New("missing target path")
 	}
+
 	if c.nodeV1ClientCreator == nil {
 		return errors.New("failed to call NodePublishVolume. nodeV1ClientCreator is nil")
 
@@ -255,6 +257,9 @@ func (c *csiDriverClient) NodePublishVolume(
 	}
 
 	_, err = nodeClient.NodePublishVolume(ctx, req)
+	if err != nil && !isFinalError(err) {
+		return volumetypes.NewUncertainProgressError(err.Error())
+	}
 	return err
 }
 
@@ -374,6 +379,9 @@ func (c *csiDriverClient) NodeStageVolume(ctx context.Context,
 	}
 
 	_, err = nodeClient.NodeStageVolume(ctx, req)
+	if err != nil && !isFinalError(err) {
+		return volumetypes.NewUncertainProgressError(err.Error())
+	}
 	return err
 }
 
@@ -486,8 +494,8 @@ func newGrpcConn(addr csiAddr) (*grpc.ClientConn, error) {
 	return grpc.Dial(
 		string(addr),
 		grpc.WithInsecure(),
-		grpc.WithDialer(func(target string, timeout time.Duration) (net.Conn, error) {
-			return net.Dial(network, target)
+		grpc.WithContextDialer(func(ctx context.Context, target string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, target)
 		}),
 	)
 }
@@ -612,4 +620,28 @@ func (c *csiDriverClient) NodeGetVolumeStats(ctx context.Context, volID string, 
 
 	}
 	return metrics, nil
+}
+
+func isFinalError(err error) bool {
+	// Sources:
+	// https://github.com/grpc/grpc/blob/master/doc/statuscodes.md
+	// https://github.com/container-storage-interface/spec/blob/master/spec.md
+	st, ok := status.FromError(err)
+	if !ok {
+		// This is not gRPC error. The operation must have failed before gRPC
+		// method was called, otherwise we would get gRPC error.
+		// We don't know if any previous volume operation is in progress, be on the safe side.
+		return false
+	}
+	switch st.Code() {
+	case codes.Canceled, // gRPC: Client Application cancelled the request
+		codes.DeadlineExceeded,  // gRPC: Timeout
+		codes.Unavailable,       // gRPC: Server shutting down, TCP connection broken - previous volume operation may be still in progress.
+		codes.ResourceExhausted, // gRPC: Server temporarily out of resources - previous volume operation may be still in progress.
+		codes.Aborted:           // CSI: Operation pending for volume
+		return false
+	}
+	// All other errors mean that operation either did not
+	// even start or failed. It is for sure not in progress.
+	return true
 }

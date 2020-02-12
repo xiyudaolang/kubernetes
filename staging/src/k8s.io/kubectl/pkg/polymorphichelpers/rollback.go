@@ -18,6 +18,7 @@ package polymorphichelpers
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"sort"
 
@@ -109,7 +110,7 @@ func (r *DeploymentRollbacker) Rollback(obj runtime.Object, updatedAnnotations m
 	// to the external appsv1 Deployment without round-tripping through an internal version of Deployment. We're
 	// currently getting rid of all internal versions of resources. So we specifically request the appsv1 version
 	// here. This follows the same pattern as for DaemonSet and StatefulSet.
-	deployment, err := r.c.AppsV1().Deployments(namespace).Get(name, metav1.GetOptions{})
+	deployment, err := r.c.AppsV1().Deployments(namespace).Get(context.TODO(), name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to retrieve Deployment %s: %v", name, err)
 	}
@@ -153,7 +154,7 @@ func (r *DeploymentRollbacker) Rollback(obj runtime.Object, updatedAnnotations m
 	}
 
 	// Restore revision
-	if _, err = r.c.AppsV1().Deployments(namespace).Patch(name, patchType, patch); err != nil {
+	if _, err = r.c.AppsV1().Deployments(namespace).Patch(context.TODO(), name, patchType, patch, metav1.PatchOptions{}); err != nil {
 		return "", fmt.Errorf("failed restoring revision %d: %v", toRevision, err)
 	}
 	return rollbackSuccess, nil
@@ -293,7 +294,7 @@ func (r *DaemonSetRollbacker) Rollback(obj runtime.Object, updatedAnnotations ma
 	}
 
 	// Restore revision
-	if _, err = r.c.AppsV1().DaemonSets(accessor.GetNamespace()).Patch(accessor.GetName(), types.StrategicMergePatchType, toHistory.Data.Raw); err != nil {
+	if _, err = r.c.AppsV1().DaemonSets(accessor.GetNamespace()).Patch(context.TODO(), accessor.GetName(), types.StrategicMergePatchType, toHistory.Data.Raw, metav1.PatchOptions{}); err != nil {
 		return "", fmt.Errorf("failed restoring revision %d: %v", toRevision, err)
 	}
 
@@ -380,7 +381,7 @@ func (r *StatefulSetRollbacker) Rollback(obj runtime.Object, updatedAnnotations 
 	}
 
 	// Restore revision
-	if _, err = r.c.AppsV1().StatefulSets(sts.Namespace).Patch(sts.Name, types.StrategicMergePatchType, toHistory.Data.Raw); err != nil {
+	if _, err = r.c.AppsV1().StatefulSets(sts.Namespace).Patch(context.TODO(), sts.Name, types.StrategicMergePatchType, toHistory.Data.Raw, metav1.PatchOptions{}); err != nil {
 		return "", fmt.Errorf("failed restoring revision %d: %v", toRevision, err)
 	}
 
@@ -392,16 +393,16 @@ var appsCodec = scheme.Codecs.LegacyCodec(appsv1.SchemeGroupVersion)
 // applyRevision returns a new StatefulSet constructed by restoring the state in revision to set. If the returned error
 // is nil, the returned StatefulSet is valid.
 func applyRevision(set *appsv1.StatefulSet, revision *appsv1.ControllerRevision) (*appsv1.StatefulSet, error) {
-	clone := set.DeepCopy()
-	patched, err := strategicpatch.StrategicMergePatch([]byte(runtime.EncodeOrDie(appsCodec, clone)), revision.Data.Raw, clone)
+	patched, err := strategicpatch.StrategicMergePatch([]byte(runtime.EncodeOrDie(appsCodec, set)), revision.Data.Raw, set)
 	if err != nil {
 		return nil, err
 	}
-	err = json.Unmarshal(patched, clone)
+	result := &appsv1.StatefulSet{}
+	err = json.Unmarshal(patched, result)
 	if err != nil {
 		return nil, err
 	}
-	return clone, nil
+	return result, nil
 }
 
 // statefulsetMatch check if the given StatefulSet's template matches the template stored in the given history.

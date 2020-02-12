@@ -18,6 +18,7 @@ package certificate
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -200,7 +201,6 @@ func TestSetRotationDeadline(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			g := metricMock{}
 			m := manager{
 				cert: &tls.Certificate{
 					Leaf: &x509.Certificate{
@@ -208,10 +208,9 @@ func TestSetRotationDeadline(t *testing.T) {
 						NotAfter:  tc.notAfter,
 					},
 				},
-				getTemplate:           func() *x509.CertificateRequest { return &x509.CertificateRequest{} },
-				usages:                []certificates.KeyUsage{},
-				certificateExpiration: &g,
-				now:                   func() time.Time { return now },
+				getTemplate: func() *x509.CertificateRequest { return &x509.CertificateRequest{} },
+				usages:      []certificates.KeyUsage{},
+				now:         func() time.Time { return now },
 			}
 			jitteryDuration = func(float64) time.Duration { return time.Duration(float64(tc.notAfter.Sub(tc.notBefore)) * 0.7) }
 			lowerBound := tc.notBefore.Add(time.Duration(float64(tc.notAfter.Sub(tc.notBefore)) * 0.7))
@@ -224,12 +223,6 @@ func TestSetRotationDeadline(t *testing.T) {
 					tc.notAfter,
 					deadline,
 					lowerBound)
-			}
-			if g.calls != 1 {
-				t.Errorf("%d metrics were recorded, wanted %d", g.calls, 1)
-			}
-			if g.lastValue != float64(tc.notAfter.Unix()) {
-				t.Errorf("%f value for metric was recorded, wanted %d", g.lastValue, tc.notAfter.Unix())
 			}
 		})
 	}
@@ -1004,7 +997,7 @@ type fakeClient struct {
 	err            error
 }
 
-func (c fakeClient) List(opts v1.ListOptions) (*certificates.CertificateSigningRequestList, error) {
+func (c fakeClient) List(_ context.Context, opts v1.ListOptions) (*certificates.CertificateSigningRequestList, error) {
 	if c.failureType == watchError {
 		if c.err != nil {
 			return nil, c.err
@@ -1019,7 +1012,7 @@ func (c fakeClient) List(opts v1.ListOptions) (*certificates.CertificateSigningR
 	return &csrReply, nil
 }
 
-func (c fakeClient) Create(*certificates.CertificateSigningRequest) (*certificates.CertificateSigningRequest, error) {
+func (c fakeClient) Create(context.Context, *certificates.CertificateSigningRequest, v1.CreateOptions) (*certificates.CertificateSigningRequest, error) {
 	if c.failureType == createError {
 		if c.err != nil {
 			return nil, c.err
@@ -1031,7 +1024,7 @@ func (c fakeClient) Create(*certificates.CertificateSigningRequest) (*certificat
 	return &csrReply, nil
 }
 
-func (c fakeClient) Watch(opts v1.ListOptions) (watch.Interface, error) {
+func (c fakeClient) Watch(_ context.Context, opts v1.ListOptions) (watch.Interface, error) {
 	if c.failureType == watchError {
 		if c.err != nil {
 			return nil, c.err

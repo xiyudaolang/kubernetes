@@ -118,7 +118,7 @@ func NewCmdApplySetLastApplied(f cmdutil.Factory, ioStreams genericclioptions.IO
 
 // Complete populates dry-run and output flag options.
 func (o *SetLastAppliedOptions) Complete(f cmdutil.Factory, cmd *cobra.Command) error {
-	o.dryRun = cmdutil.GetDryRunFlag(cmd)
+	o.dryRun = cmdutil.GetClientSideDryRun(cmd)
 	o.output = cmdutil.GetFlagString(cmd, "output")
 	o.shortOutput = o.output == "name"
 
@@ -206,7 +206,7 @@ func (o *SetLastAppliedOptions) RunSetLastApplied() error {
 				return err
 			}
 			helper := resource.NewHelper(client, mapping)
-			finalObj, err = helper.Patch(o.namespace, info.Name, patch.PatchType, patch.Patch, nil)
+			finalObj, err = helper.Patch(info.Namespace, info.Name, patch.PatchType, patch.Patch, nil)
 			if err != nil {
 				return err
 			}

@@ -18,6 +18,7 @@ package common
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"runtime/debug"
@@ -27,7 +28,7 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -48,14 +49,10 @@ import (
 	"github.com/onsi/gomega"
 )
 
-var (
+const (
 	buildBackOffDuration = time.Minute
 	syncLoopFrequency    = 10 * time.Second
 	maxBackOffTolerance  = time.Duration(1.3 * float64(kubelet.MaxContainerBackOff))
-	// maxReadyStatusUpdateTolerance specifies the latency that allows kubelet to update pod status.
-	// When kubelet is under heavy load (tests may be parallelized), the delay may be longer, hence
-	// causing tests to be flaky.
-	maxReadyStatusUpdateTolerance = 10 * time.Second
 )
 
 // testHostIP tests that a pod gets a host IP
@@ -67,7 +64,7 @@ func testHostIP(podClient *framework.PodClient, pod *v1.Pod) {
 	hostIPTimeout := 2 * time.Minute
 	t := time.Now()
 	for {
-		p, err := podClient.Get(pod.Name, metav1.GetOptions{})
+		p, err := podClient.Get(context.TODO(), pod.Name, metav1.GetOptions{})
 		framework.ExpectNoError(err, "Failed to get pod %q", pod.Name)
 		if p.Status.HostIP != "" {
 			framework.Logf("Pod %s has hostIP: %s", p.Name, p.Status.HostIP)
@@ -115,7 +112,7 @@ func getRestartDelay(podClient *framework.PodClient, podName string, containerNa
 	var previousFinishedAt time.Time
 	for time.Since(beginTime) < (2 * maxBackOffTolerance) { // may just miss the 1st MaxContainerBackOff delay
 		time.Sleep(time.Second)
-		pod, err := podClient.Get(podName, metav1.GetOptions{})
+		pod, err := podClient.Get(context.TODO(), podName, metav1.GetOptions{})
 		framework.ExpectNoError(err, fmt.Sprintf("getting pod %s", podName))
 		status, ok := podutil.GetContainerStatus(pod.Status.ContainerStatuses, containerName)
 		if !ok {
@@ -234,7 +231,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		ginkgo.By("setting up watch")
 		selector := labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options := metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err := podClient.List(options)
+		pods, err := podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 0)
 		options = metav1.ListOptions{
@@ -246,7 +243,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		lw := &cache.ListWatch{
 			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 				options.LabelSelector = selector.String()
-				podList, err := podClient.List(options)
+				podList, err := podClient.List(context.TODO(), options)
 				if err == nil {
 					select {
 					case listCompleted <- true:
@@ -260,7 +257,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 			},
 			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
 				options.LabelSelector = selector.String()
-				return podClient.Watch(options)
+				return podClient.Watch(context.TODO(), options)
 			},
 		}
 		_, _, w, _ := watchtools.NewIndexerInformerWatcher(lw, &v1.Pod{})
@@ -272,7 +269,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		ginkgo.By("verifying the pod is in kubernetes")
 		selector = labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options = metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err = podClient.List(options)
+		pods, err = podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 1)
 
@@ -295,11 +292,11 @@ var _ = framework.KubeDescribe("Pods", func() {
 		// may be carried out immediately rather than gracefully.
 		framework.ExpectNoError(f.WaitForPodRunning(pod.Name))
 		// save the running pod
-		pod, err = podClient.Get(pod.Name, metav1.GetOptions{})
+		pod, err = podClient.Get(context.TODO(), pod.Name, metav1.GetOptions{})
 		framework.ExpectNoError(err, "failed to GET scheduled pod")
 
 		ginkgo.By("deleting the pod gracefully")
-		err = podClient.Delete(pod.Name, metav1.NewDeleteOptions(30))
+		err = podClient.Delete(context.TODO(), pod.Name, metav1.NewDeleteOptions(30))
 		framework.ExpectNoError(err, "failed to delete pod")
 
 		ginkgo.By("verifying the kubelet observed the termination notice")
@@ -352,7 +349,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 
 		selector = labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options = metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err = podClient.List(options)
+		pods, err = podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 0)
 	})
@@ -390,7 +387,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		ginkgo.By("verifying the pod is in kubernetes")
 		selector := labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options := metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err := podClient.List(options)
+		pods, err := podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 1)
 
@@ -405,7 +402,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		ginkgo.By("verifying the updated pod is in kubernetes")
 		selector = labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options = metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err = podClient.List(options)
+		pods, err = podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 1)
 		framework.Logf("Pod update OK")
@@ -444,7 +441,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		ginkgo.By("verifying the pod is in kubernetes")
 		selector := labels.SelectorFromSet(labels.Set(map[string]string{"time": value}))
 		options := metav1.ListOptions{LabelSelector: selector.String()}
-		pods, err := podClient.List(options)
+		pods, err := podClient.List(context.TODO(), options)
 		framework.ExpectNoError(err, "failed to query for pods")
 		framework.ExpectEqual(len(pods.Items), 1)
 
@@ -508,7 +505,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 				},
 			},
 		}
-		_, err := f.ClientSet.CoreV1().Services(f.Namespace.Name).Create(svc)
+		_, err := f.ClientSet.CoreV1().Services(f.Namespace.Name).Create(context.TODO(), svc, metav1.CreateOptions{})
 		framework.ExpectNoError(err, "failed to create service")
 
 		// Make a client pod that verifies that it has the service environment variables.
@@ -816,7 +813,7 @@ var _ = framework.KubeDescribe("Pods", func() {
 		}
 
 		validatePodReadiness := func(expectReady bool) {
-			err := wait.Poll(time.Second, maxReadyStatusUpdateTolerance, func() (bool, error) {
+			err := wait.Poll(time.Second, wait.ForeverTestTimeout, func() (bool, error) {
 				podReady := podClient.PodIsReady(podName)
 				res := expectReady == podReady
 				if !res {
@@ -829,22 +826,23 @@ var _ = framework.KubeDescribe("Pods", func() {
 
 		ginkgo.By("submitting the pod to kubernetes")
 		podClient.CreateSync(pod)
-		gomega.Expect(podClient.PodIsReady(podName)).To(gomega.BeFalse(), "Expect pod's Ready condition to be false initially.")
+		framework.ExpectEqual(podClient.PodIsReady(podName), false, "Expect pod's Ready condition to be false initially.")
 
 		ginkgo.By(fmt.Sprintf("patching pod status with condition %q to true", readinessGate1))
-		_, err := podClient.Patch(podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate1, "True")), "status")
+		_, err := podClient.Patch(context.TODO(), podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate1, "True")), metav1.PatchOptions{}, "status")
 		framework.ExpectNoError(err)
 		// Sleep for 10 seconds.
-		time.Sleep(maxReadyStatusUpdateTolerance)
-		gomega.Expect(podClient.PodIsReady(podName)).To(gomega.BeFalse(), "Expect pod's Ready condition to be false with only one condition in readinessGates equal to True")
+		time.Sleep(syncLoopFrequency)
+		// Verify the pod is still not ready
+		framework.ExpectEqual(podClient.PodIsReady(podName), false, "Expect pod's Ready condition to be false with only one condition in readinessGates equal to True")
 
 		ginkgo.By(fmt.Sprintf("patching pod status with condition %q to true", readinessGate2))
-		_, err = podClient.Patch(podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate2, "True")), "status")
+		_, err = podClient.Patch(context.TODO(), podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate2, "True")), metav1.PatchOptions{}, "status")
 		framework.ExpectNoError(err)
 		validatePodReadiness(true)
 
 		ginkgo.By(fmt.Sprintf("patching pod status with condition %q to false", readinessGate1))
-		_, err = podClient.Patch(podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate1, "False")), "status")
+		_, err = podClient.Patch(context.TODO(), podName, types.StrategicMergePatchType, []byte(fmt.Sprintf(patchStatusFmt, readinessGate1, "False")), metav1.PatchOptions{}, "status")
 		framework.ExpectNoError(err)
 		validatePodReadiness(false)
 

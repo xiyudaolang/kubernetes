@@ -17,12 +17,13 @@ limitations under the License.
 package network
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
 	discoveryv1alpha1 "k8s.io/api/discovery/v1alpha1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -157,12 +158,12 @@ var _ = SIGDescribe("EndpointSlice [Feature:EndpointSlice]", func() {
 				}
 
 				var err error
-				pod1, err = podClient.Get(pod1.Name, metav1.GetOptions{})
+				pod1, err = podClient.Get(context.TODO(), pod1.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
 
-				pod2, err = podClient.Get(pod2.Name, metav1.GetOptions{})
+				pod2, err = podClient.Get(context.TODO(), pod2.Name, metav1.GetOptions{})
 				if err != nil {
 					return false, err
 				}
@@ -354,7 +355,7 @@ func expectEndpointsAndSlices(cs clientset.Interface, ns string, svc *v1.Service
 // met.
 func hasMatchingEndpointSlices(cs clientset.Interface, ns, svcName string, numEndpoints, numSlices int) ([]discoveryv1alpha1.EndpointSlice, bool) {
 	listOptions := metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", discoveryv1alpha1.LabelServiceName, svcName)}
-	esList, err := cs.DiscoveryV1alpha1().EndpointSlices(ns).List(listOptions)
+	esList, err := cs.DiscoveryV1alpha1().EndpointSlices(ns).List(context.TODO(), listOptions)
 	framework.ExpectNoError(err, "Error fetching EndpointSlice for %s/%s Service", ns, svcName)
 
 	if len(esList.Items) == 0 {
@@ -381,9 +382,9 @@ func hasMatchingEndpointSlices(cs clientset.Interface, ns, svcName string, numEn
 // hasMatchingEndpoints returns any Endpoints that match the conditions along
 // with a boolean indicating if all the conditions have been met.
 func hasMatchingEndpoints(cs clientset.Interface, ns, svcName string, numIPs, numSubsets int) (*v1.Endpoints, bool) {
-	endpoints, err := cs.CoreV1().Endpoints(ns).Get(svcName, metav1.GetOptions{})
+	endpoints, err := cs.CoreV1().Endpoints(ns).Get(context.TODO(), svcName, metav1.GetOptions{})
 	if err != nil {
-		if errors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) {
 			framework.Logf("Endpoints for %s/%s Service not found", ns, svcName)
 			return nil, false
 		}
@@ -427,7 +428,7 @@ func ensurePodTargetRef(pod *v1.Pod, targetRef *v1.ObjectReference) {
 
 // createServiceReportErr creates a Service and reports any associated error.
 func createServiceReportErr(cs clientset.Interface, ns string, service *v1.Service) *v1.Service {
-	svc, err := cs.CoreV1().Services(ns).Create(service)
+	svc, err := cs.CoreV1().Services(ns).Create(context.TODO(), service, metav1.CreateOptions{})
 	framework.ExpectNoError(err)
 	return svc
 }
